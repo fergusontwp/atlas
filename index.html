@@ -1,0 +1,1200 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Parcel Viewer</title>
+    <link rel="icon" href="favicon.ico" sizes="any" />
+
+    <!-- One tag loads the Maps SDK, the map components, and Calcite -->
+    <script type="module" src="https://js.arcgis.com/5.1/"></script>
+    <script type="module" src="./app.js"></script>
+
+    <style>
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+      }
+      calcite-shell {
+        height: 100%;
+      }
+      #map-host,
+      arcgis-map {
+        display: block;
+        height: 100%;
+        width: 100%;
+      }
+      #map-host {
+        position: relative;
+      }
+      /* The map area is a row: the sheet pane (only while the georeferencing workspace is open) and the map. */
+      #content-row {
+        display: flex;
+        height: 100%;
+        width: 100%;
+      }
+      #content-row > #map-host {
+        flex: 1 1 0;
+        width: auto;
+        min-width: 0;
+      }
+      #sheet-pane {
+        flex: none;
+        display: flex;
+        flex-direction: column;
+        width: var(--sheet-pane-width, 45%);
+        min-width: 18rem;
+        max-width: 75%;
+        background: var(--calcite-color-foreground-2, #f3f3f3);
+        font-family: var(--calcite-font-family, sans-serif);
+      }
+      #sheet-host {
+        position: relative;
+        flex: 1 1 0;
+        min-height: 0;
+      }
+      #sheet-canvas {
+        position: absolute;
+        inset: 0;
+        display: block;
+        width: 100%;
+        height: 100%;
+        touch-action: none;
+      }
+      .sheet-empty {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: var(--calcite-spacing-xl, 20px);
+        text-align: center;
+        font-size: 14px;
+        color: var(--calcite-color-text-3, #6a6a6a);
+        pointer-events: none;
+      }
+      .sheet-tools {
+        position: absolute;
+        top: var(--calcite-spacing-sm, 8px);
+        right: var(--calcite-spacing-sm, 8px);
+        display: flex;
+        flex-direction: column;
+        background: var(--calcite-color-foreground-1, #fff);
+        border: 1px solid var(--calcite-color-border-3, #ddd);
+        border-radius: 4px;
+      }
+      .sheet-readout {
+        min-height: 1.5em;
+        padding: 4px var(--calcite-spacing-md, 12px);
+        border-top: 1px solid var(--calcite-color-border-3, #ddd);
+        background: var(--calcite-color-foreground-1, #fff);
+        font-size: 12px;
+        color: var(--calcite-color-text-3, #6a6a6a);
+        font-variant-numeric: tabular-nums;
+      }
+      #sheet-splitter {
+        flex: none;
+        width: 6px;
+        cursor: col-resize;
+        background: var(--calcite-color-border-3, #ddd);
+        touch-action: none;
+      }
+      #sheet-splitter:hover,
+      #sheet-splitter:focus-visible,
+      #sheet-splitter.dragging {
+        background: var(--calcite-color-brand, #007ac2);
+        outline: none;
+      }
+      /* Workspace mode in the left panel: the blocks give way to the steps, the filter editor and Measure stand down. */
+      calcite-shell-panel.workspace-open > calcite-panel > calcite-block {
+        display: none;
+      }
+      body.workspace-open #filter-dialog,
+      body.workspace-open #legend-wrap {
+        display: none !important;
+      }
+      /* The legend: a sticky header row (title and a minimize chevron) above the arcgis-legend. */
+      #legend-wrap {
+        width: fit-content;
+        background: var(--calcite-color-foreground-1, #fff);
+      }
+      .legend-head {
+        position: sticky;
+        top: 0;
+        z-index: 1;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: var(--calcite-spacing-lg, 16px);
+        padding: 0 var(--calcite-spacing-xxs, 4px) 0 var(--calcite-spacing-md, 12px);
+        min-height: 32px;
+        background: var(--calcite-color-foreground-1, #fff);
+        border-bottom: 1px solid var(--calcite-color-border-3, #ddd);
+        font-family: var(--calcite-font-family, sans-serif);
+        font-size: 14px;
+        font-weight: 600;
+        color: var(--calcite-color-text-1, #151515);
+      }
+      #legend-wrap.legend-minimized .legend-head {
+        border-bottom: none;
+      }
+      /* Anchored to the right edge of the map area, so it moves with the shell layout. */
+      .filter-editor {
+        position: absolute;
+        top: var(--filter-editor-top, 12px);
+        right: 12px;
+        z-index: 10;
+        width: min(26rem, calc(100% - 6rem));
+        height: auto;
+        max-height: var(--filter-editor-max-height, calc(100% - 24px));
+        overflow: hidden;
+        border-radius: 4px;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+        /* calcite-panel pads its content and footer with these (content defaults to 0, so slotted controls
+           sat flush against the edges). */
+        --calcite-panel-content-space: var(--calcite-spacing-lg);
+        --calcite-panel-footer-space: var(--calcite-spacing-lg);
+      }
+      /* Parcel search: in the map area's top-left corner, above the zoom buttons and compass (which are pushed down
+         by the box's height plus the SDK's 10px gap). A sibling of the map, above the filter editor (z-index 10), so
+         its results list can drop over the editor when the map area is narrow. */
+      .parcel-search {
+        position: absolute;
+        top: 15px;
+        left: 15px;
+        z-index: 20;
+        width: 20rem;
+        max-width: calc(100% - 30px);
+      }
+      arcgis-zoom[slot="top-left"] {
+        margin-block-start: 42px;
+      }
+      .parcel-search calcite-input-text {
+        box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+        border-radius: 4px;
+      }
+      .parcel-search-results {
+        position: absolute;
+        top: calc(100% + 4px);
+        left: 0;
+        right: 0;
+        z-index: 20;
+        max-height: min(24rem, calc(100vh - 12rem));
+        overflow-y: auto;
+        background: var(--calcite-color-foreground-1, #fff);
+        border-radius: 4px;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+        font-family: var(--calcite-font-family, sans-serif);
+      }
+      .parcel-search-row {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        align-items: baseline;
+        gap: 2px var(--calcite-spacing-sm, 8px);
+        width: 100%;
+        padding: var(--calcite-spacing-sm, 8px) var(--calcite-spacing-md, 12px);
+        border: 0;
+        border-bottom: 1px solid var(--calcite-color-border-3, #ddd);
+        background: none;
+        font: inherit;
+        text-align: left;
+        cursor: pointer;
+      }
+      .parcel-search-row:last-child {
+        border-bottom: 0;
+      }
+      .parcel-search-row:hover,
+      .parcel-search-row.active {
+        background: var(--calcite-color-foreground-2, #f3f3f3);
+      }
+      .parcel-search-main {
+        font-size: 14px;
+        font-weight: 500;
+        color: var(--calcite-color-text-1, #151515);
+        overflow-wrap: anywhere;
+      }
+      .parcel-search-tag {
+        font-size: 11px;
+        color: var(--calcite-color-text-3, #6a6a6a);
+        border: 1px solid var(--calcite-color-border-2, #ccc);
+        border-radius: 3px;
+        padding: 0 4px;
+        white-space: nowrap;
+      }
+      .parcel-search-sub {
+        grid-column: 1 / -1;
+        font-size: 12px;
+        color: var(--calcite-color-text-3, #6a6a6a);
+        overflow-wrap: anywhere;
+      }
+      .parcel-search-note {
+        padding: var(--calcite-spacing-md, 12px);
+        font-size: 13px;
+        color: var(--calcite-color-text-3, #6a6a6a);
+      }
+      .header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: var(--calcite-spacing-md, 12px) var(--calcite-spacing-xl, 16px);
+        font-family: var(--calcite-font-family, sans-serif);
+        border-bottom: 1px solid var(--calcite-color-border-3, #ddd);
+      }
+      .header h1 {
+        margin: 0;
+        font-size: 16px;
+        font-weight: 500;
+      }
+      #user {
+        font-size: 13px;
+        color: var(--calcite-color-text-2, #555);
+      }
+      #status[open] {
+        margin: var(--calcite-spacing-md, 12px);
+      }
+      [hidden] {
+        display: none !important;
+      }
+      /* Left panel blocks (Sprint 3 task 0c): a thick divider under each block, heavier headings, and an accent
+         bar on the open one. The bar's space is always reserved (transparent when closed), so opening or closing a
+         block never shifts anything. Only the top-level blocks match; the nested ones inside Labels keep the stock look. */
+      calcite-shell-panel[slot="panel-start"] > calcite-panel > calcite-block {
+        margin: 0;
+        border-block-end: var(--calcite-border-width-lg) solid var(--calcite-color-border-1);
+        border-inline-start: var(--calcite-border-width-lg) solid transparent;
+        --calcite-block-border-color: var(--calcite-color-border-1);
+        /* The heading reads these tokens (normal when closed, medium when open); content gets the stock weights back. */
+        --calcite-font-weight-normal: 600;
+        --calcite-font-weight-medium: 700;
+      }
+      calcite-shell-panel[slot="panel-start"] > calcite-panel > calcite-block > * {
+        --calcite-font-weight-normal: 400;
+        --calcite-font-weight-medium: 500;
+      }
+      calcite-shell-panel[slot="panel-start"] > calcite-panel > calcite-block[expanded] {
+        border-inline-start-color: var(--calcite-color-brand);
+      }
+      #parcel-shell-panel {
+        --calcite-shell-panel-width: 26rem;
+        --calcite-shell-panel-min-width: 18rem;
+        --calcite-shell-panel-max-width: 40vw;
+      }
+      .popup-pager {
+        display: flex;
+        align-items: center;
+      }
+      .popup-counter {
+        white-space: nowrap;
+        font-size: var(--calcite-font-size-sm);
+      }
+      .selectable-reset {
+        margin: var(--calcite-spacing-sm);
+        max-width: calc(100% - 16px);
+      }
+      .selectable-menu {
+        position: fixed;
+        z-index: 100;
+        background: var(--calcite-color-foreground-1);
+        box-shadow: var(--calcite-shadow-md);
+      }
+      .selectable-badge {
+        color: var(--calcite-color-brand);
+      }
+      .parcel-state {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: var(--calcite-spacing-md, 12px);
+        padding: var(--calcite-spacing-xxl, 32px) var(--calcite-spacing-xl, 16px);
+        text-align: center;
+        color: var(--calcite-color-text-3, #6a6a6a);
+        font-family: var(--calcite-font-family, sans-serif);
+        font-size: 14px;
+      }
+      .parcel-state p {
+        margin: 0;
+      }
+      #parcel-error {
+        margin: var(--calcite-spacing-md, 12px);
+      }
+      .filter-row calcite-label {
+        margin-bottom: var(--calcite-spacing-sm, 8px);
+      }
+      .filter-op-value {
+        display: flex;
+        flex-wrap: wrap;
+        gap: var(--calcite-spacing-sm, 8px);
+      }
+      .filter-op-value > calcite-select {
+        flex: 1 1 6.5rem;
+      }
+      .filter-values {
+        display: flex;
+        flex: 1 1 6.5rem;
+        flex-direction: column;
+        gap: var(--calcite-spacing-sm, 8px);
+      }
+      .filter-buttons {
+        display: flex;
+        gap: var(--calcite-spacing-sm, 8px);
+        margin-top: var(--calcite-spacing-md, 12px);
+      }
+      .filter-dialog-heading {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+      .filter-dialog-count {
+        font-size: 18px;
+        font-weight: 500;
+      }
+      .filter-dialog-count.empty {
+        color: var(--calcite-color-status-warning, #bd6f00);
+      }
+      #filter-dialog-body .filter-row {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: var(--calcite-spacing-sm, 8px);
+        align-items: end;
+        padding: var(--calcite-spacing-md, 12px) 0;
+        border-bottom: 1px solid var(--calcite-color-border-3, #ddd);
+      }
+      #filter-dialog-body .filter-row calcite-label {
+        margin: 0;
+      }
+      #filter-dialog-body .filter-op-value {
+        display: contents;
+      }
+      #filter-dialog-body .filter-values {
+        grid-column: 1 / -1;
+        flex-direction: row;
+      }
+      #filter-dialog-body .filter-values > * {
+        flex: 1;
+      }
+      #filter-dialog-body .filter-remove {
+        grid-column: 1 / -1;
+        justify-self: end;
+      }
+      .filter-sql {
+        margin-top: var(--calcite-spacing-lg, 16px);
+      }
+      .filter-sql calcite-text-area {
+        margin: var(--calcite-spacing-sm, 8px) 0;
+      }
+      .filter-summary {
+        font-family: var(--calcite-font-family, sans-serif);
+        font-size: 13px;
+        margin-bottom: var(--calcite-spacing-sm, 8px);
+      }
+      .filter-count {
+        margin-top: var(--calcite-spacing-md, 12px);
+        font-family: var(--calcite-font-family, sans-serif);
+        font-size: 13px;
+        font-weight: 500;
+      }
+      .filter-count.empty {
+        color: var(--calcite-color-status-warning, #bd6f00);
+      }
+      /* What's in this parcel */
+      .here-layers {
+        max-height: 12rem;
+        overflow-y: auto;
+        margin: var(--calcite-spacing-xs, 6px) 0 var(--calcite-spacing-md, 12px);
+      }
+      .here-layers calcite-label {
+        margin-bottom: var(--calcite-spacing-xxs, 4px);
+      }
+      .here-layers .here-leaf {
+        margin-inline-start: 24px; /* in line with the group boxes, which have a chevron to their left */
+      }
+      .here-group-head {
+        display: flex;
+        align-items: center;
+      }
+      .here-group-kids {
+        margin-inline-start: var(--calcite-spacing-xl, 20px);
+      }
+      .here-group-kids[hidden] {
+        display: none;
+      }
+      /* The buttons at the top of the parcel panel (two to a line), and the faded block header while no parcel is
+         selected (a normal element with aria-disabled, so its tooltip still gets the hover). */
+      .parcel-actions {
+        box-sizing: border-box;
+        display: flex;
+        gap: var(--calcite-spacing-sm, 8px);
+        width: 100%;
+        padding: var(--calcite-spacing-md, 12px) var(--calcite-spacing-lg, 16px);
+        border-bottom: 1px solid var(--calcite-color-border-3, #ddd);
+        background: var(--calcite-color-foreground-1, #fff);
+      }
+      .parcel-actions calcite-button {
+        flex: 1 1 0;
+        min-width: 0;
+      }
+      .block-faded {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+      .here-row {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: var(--calcite-spacing-sm, 8px);
+        margin: var(--calcite-spacing-sm, 8px) 0;
+      }
+      .here-section {
+        margin-top: var(--calcite-spacing-md, 12px);
+      }
+      .here-group-head,
+      .here-item {
+        display: flex;
+        align-items: baseline;
+        gap: var(--calcite-spacing-xs, 6px);
+        width: 100%;
+        padding: var(--calcite-spacing-xs, 6px) 0;
+        border: 0;
+        background: none;
+        font: inherit;
+        font-size: 13px;
+        color: var(--calcite-color-text-1, #151515);
+        text-align: left;
+        cursor: pointer;
+      }
+      .here-group {
+        border-top: 1px solid var(--calcite-color-border-3, #ddd);
+      }
+      .here-group-head {
+        align-items: center;
+        font-weight: 500;
+      }
+      .here-group-count {
+        margin-inline-start: auto;
+        font-weight: 400;
+        color: var(--calcite-color-text-3, #6a6a6a);
+        text-align: right;
+      }
+      .here-items {
+        margin: 0 0 var(--calcite-spacing-xs, 6px) var(--calcite-spacing-lg, 16px);
+      }
+      .here-item {
+        padding: 2px var(--calcite-spacing-xs, 6px);
+        border-radius: 3px;
+      }
+      .here-item:hover,
+      .here-item.emphasized {
+        background: var(--calcite-color-foreground-2, #f3f3f3);
+      }
+      .here-item.emphasized {
+        font-weight: 500;
+      }
+      .here-item small {
+        margin-inline-start: auto;
+        color: var(--calcite-color-text-3, #6a6a6a);
+      }
+      /* The results table: an overlay over the map area only. It is a child of #map-host, so the shell's layout moves and
+         resizes it with the map, and it can't reach the left panel or the parcel panel (the layout rule). */
+      .here-table-overlay {
+        position: absolute;
+        inset: 0;
+        z-index: 40;
+      }
+      .here-table-overlay[hidden] {
+        display: none;
+      }
+      .here-table-scrim {
+        position: absolute;
+        inset: 0;
+        background: color-mix(in srgb, var(--calcite-color-background, #f8f8f8) 60%, transparent);
+      }
+      .here-table-panel {
+        position: absolute;
+        inset: 20px;
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+        background: var(--calcite-color-foreground-1, #fff);
+        border: 1px solid var(--calcite-color-border-2, #bbb);
+        border-radius: 4px;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+        font-family: var(--calcite-font-family, sans-serif);
+        font-size: 13px;
+        color: var(--calcite-color-text-1, #151515);
+      }
+      .here-table-head {
+        display: flex;
+        align-items: center;
+        gap: var(--calcite-spacing-sm, 8px);
+        padding: 4px 4px 4px var(--calcite-spacing-md, 12px);
+        border-bottom: 1px solid var(--calcite-color-border-3, #ddd);
+      }
+      .here-table-title {
+        font-size: 15px;
+        font-weight: 500;
+      }
+      .here-table-actions {
+        display: flex;
+        gap: var(--calcite-spacing-sm, 8px);
+        margin-inline-start: auto;
+      }
+      .here-table-tabs {
+        display: flex;
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        border-bottom: 1px solid var(--calcite-color-border-3, #ddd);
+      }
+      .here-table-tab {
+        flex: none;
+        padding: 8px var(--calcite-spacing-md, 12px);
+        border: 0;
+        border-bottom: 3px solid transparent;
+        background: none;
+        font: inherit;
+        color: var(--calcite-color-text-2, #555);
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      .here-table-tab.active {
+        color: var(--calcite-color-text-1, #151515);
+        font-weight: 500;
+        border-bottom-color: var(--calcite-color-brand, #007ac2);
+      }
+      .here-table-scroll {
+        flex: 1;
+        min-height: 0;
+        overflow: auto;
+      }
+      .here-table {
+        border-collapse: separate;
+        border-spacing: 0;
+        min-width: 100%;
+      }
+      .here-table th {
+        position: sticky;
+        top: 0;
+        z-index: 1;
+        padding: 0;
+        background: var(--calcite-color-foreground-2, #f3f3f3);
+        border-bottom: 2px solid var(--calcite-color-border-2, #bbb);
+        text-align: left;
+        white-space: nowrap;
+      }
+      .here-th {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        width: 100%;
+        padding: 6px 10px;
+        border: 0;
+        background: none;
+        font: inherit;
+        font-weight: 600;
+        color: inherit;
+        cursor: pointer;
+      }
+      .here-th:hover {
+        background: var(--calcite-color-foreground-3, #eaeaea);
+      }
+      .here-sort {
+        font-size: 9px;
+        color: var(--calcite-color-brand, #007ac2);
+      }
+      .here-table td {
+        max-width: 22rem;
+        padding: 4px 10px;
+        border-bottom: 1px solid var(--calcite-color-border-3, #ddd);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .here-table th.num .here-th {
+        justify-content: flex-end;
+      }
+      .here-table td.num {
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+      }
+      .here-row-pick {
+        cursor: pointer;
+      }
+      .here-row-pick:hover,
+      .here-row-pick:focus {
+        background: var(--calcite-color-foreground-2, #f3f3f3);
+        outline: none;
+      }
+      .here-row-pick:focus {
+        box-shadow: inset 3px 0 0 var(--calcite-color-brand, #007ac2);
+      }
+      .here-table-foot {
+        padding: 6px var(--calcite-spacing-md, 12px);
+        border-top: 1px solid var(--calcite-color-border-3, #ddd);
+        font-size: 12px;
+        color: var(--calcite-color-text-3, #6a6a6a);
+      }
+      .here-error {
+        font-size: 12px;
+        color: var(--calcite-color-status-danger, #d83020);
+        margin: 0 0 var(--calcite-spacing-xs, 6px) var(--calcite-spacing-lg, 16px);
+      }
+      .labels-format {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: var(--calcite-spacing-sm, 8px);
+        margin-bottom: var(--calcite-spacing-sm, 8px);
+      }
+      .labels-inline {
+        display: flex;
+        flex-wrap: wrap;
+        gap: var(--calcite-spacing-md, 12px);
+      }
+      #labels-body calcite-block {
+        margin-top: var(--calcite-spacing-sm, 8px);
+      }
+      #measure-host {
+        margin: var(--calcite-spacing-md, 12px) 0;
+      }
+      .print-frame-overlay {
+        position: absolute;
+        inset: 0;
+        overflow: hidden;
+        pointer-events: none;
+        z-index: 4;
+      }
+      .print-frame {
+        position: absolute;
+        box-sizing: border-box;
+        border: 2px solid white;
+        outline: 1px solid #333;
+        box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.3);
+      }
+      .print-scale {
+        margin-top: var(--calcite-spacing-md, 12px);
+        font-size: 15px;
+        font-weight: 500;
+        font-variant-numeric: tabular-nums;
+      }
+      #print-set-scale, #print-continue {
+        margin-top: var(--calcite-spacing-md, 12px);
+      }
+      .print-custom {
+        display: flex;
+        gap: var(--calcite-spacing-sm, 8px);
+        margin-top: var(--calcite-spacing-sm, 8px);
+      }
+      .print-custom calcite-input-number {
+        flex: 1;
+        min-width: 0;
+      }
+      /* Print visibility only: mounted controls and their minimized/open state are preserved. */
+      #map-host.print-framing :is(.parcel-search, arcgis-zoom, arcgis-compass, #legend-wrap, .filter-editor) {
+        visibility: hidden;
+        pointer-events: none;
+      }
+      .print-editor {
+        position: fixed;
+        inset: 0;
+        z-index: 2000;
+        display: flex;
+        flex-direction: column;
+        background: var(--calcite-color-background, #f3f3f3);
+        color: var(--calcite-color-text-1, #222);
+      }
+      .print-editor-bar {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        padding: 12px 16px;
+        border-bottom: 1px solid var(--calcite-color-border-3, #ddd);
+        background: var(--calcite-color-foreground-1, white);
+      }
+      .print-editor-bar strong { flex: 1; }
+      #print-filename { width: 240px; }
+      #print-format { width: 85px; }
+      .print-editor-main {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 280px;
+        flex: 1;
+        min-height: 0;
+      }
+      .print-preview {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        overflow: hidden;
+        min-width: 0;
+        min-height: 0;
+        background: #34383b;
+      }
+      .print-preview canvas { box-shadow: 0 3px 20px #0006; }
+      .print-page { position: relative; flex: none; }
+      .print-page canvas { width: 100%; height: 100%; display: block; }
+      .print-page-busy { pointer-events: none; }
+      .print-sketch-live { position: absolute; inset: 0; pointer-events: none; }
+      .print-sketch-live[hidden] { display: none; }
+      .print-sketch-active { touch-action: none; }
+      .print-sketch-active .print-callout-overlay { pointer-events: none; }
+      .print-sketch-active .print-callout-hit { pointer-events: none; }
+      .print-sketch-tools, .print-sketch-settings { display: grid; gap: var(--calcite-spacing-sm, 8px); }
+      .print-sketch-settings[hidden] { display: none; }
+      .print-sketch-history { display: flex; gap: var(--calcite-spacing-xs, 4px); flex-wrap: wrap; }
+      .print-callout-overlay { position: absolute; inset: 0; pointer-events: none; }
+      .print-callout-hit { position: absolute; pointer-events: auto; cursor: move; box-sizing: border-box; }
+      .print-callout-hit.selected, .print-callout-hit:focus-visible { outline: 2px dashed var(--calcite-color-brand, #007ac2); }
+      .print-callout-hit { touch-action: none; }
+      .print-callout-handle { position: absolute; width: var(--print-callout-handle-size); height: var(--print-callout-handle-size); border: 1px solid var(--calcite-color-brand); background: white; box-sizing: border-box; transform: translate(-50%, -50%); }
+      .print-callout-handle[data-handle*=n] { top: 0; }
+      .print-callout-handle[data-handle*=s] { top: 100%; }
+      .print-callout-handle[data-handle*=w] { left: 0; }
+      .print-callout-handle[data-handle*=e] { left: 100%; }
+      .print-callout-handle[data-handle=n], .print-callout-handle[data-handle=s] { left: 50%; cursor: ns-resize; }
+      .print-callout-handle[data-handle=e], .print-callout-handle[data-handle=w] { top: 50%; cursor: ew-resize; }
+      .print-callout-handle[data-handle=nw], .print-callout-handle[data-handle=se] { cursor: nwse-resize; }
+      .print-callout-handle[data-handle=ne], .print-callout-handle[data-handle=sw] { cursor: nesw-resize; }
+      .print-placing-callout, .print-placing-callout .print-callout-hit { cursor: crosshair; }
+      .print-callout-input { position: absolute; pointer-events: auto; box-sizing: border-box; resize: none; border: 1px solid #333; background: white; color: #333; font-family: Helvetica, Arial, sans-serif; z-index: 1; }
+      .print-callout-row { display: flex; align-items: center; }
+      .print-callout-row calcite-button { flex: 1; min-width: 0; }
+      .print-callout-tools { display: grid; gap: var(--calcite-spacing-sm, 8px); }
+      .print-legend-layers { display: grid; gap: var(--calcite-spacing-xs, 4px); }
+      .print-editor-controls {
+        display: flex;
+        flex-direction: column;
+        gap: var(--calcite-spacing-lg, 16px);
+        padding: var(--calcite-spacing-lg, 16px);
+        overflow-y: auto;
+        background: var(--calcite-color-foreground-1, white);
+      }
+      .print-controls-section { display: grid; gap: var(--calcite-spacing-sm, 8px); }
+      .print-controls-heading { margin: 0; font-size: var(--calcite-font-size--1, 12px); color: var(--calcite-color-text-2); }
+      .print-element-toggle { display: flex; align-items: center; min-height: 32px; gap: var(--calcite-spacing-sm, 8px); }
+      .print-element-toggle > calcite-label { flex: 1; }
+      .print-editor-controls calcite-label, .print-editor-controls .plan-note { margin: 0; }
+      .print-element-fields { display: grid; gap: var(--calcite-spacing-sm, 8px); padding: 0 0 var(--calcite-spacing-sm, 8px) 24px; }
+      .print-element-fields[hidden], .print-element-fields:empty, .print-callout-tools[hidden], #print-callout-list:empty { display: none; }
+      .print-editor-controls .print-overflow:empty { display: none; }
+      .print-overflow { color: var(--calcite-color-status-warning, #985a00); font-size: 12px; }
+      #print-progress { margin: 0; padding: 6px 16px; min-height: 16px; }
+      .plan-drop {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: var(--calcite-spacing-sm, 8px);
+        padding: var(--calcite-spacing-lg, 16px);
+        border: 2px dashed var(--calcite-color-border-2, #ccc);
+        border-radius: 4px;
+        text-align: center;
+        font-family: var(--calcite-font-family, sans-serif);
+        font-size: 13px;
+        color: var(--calcite-color-text-2, #555);
+      }
+      .plan-drop.dragging {
+        border-color: var(--calcite-color-brand, #007ac2);
+        background: var(--calcite-color-foreground-2, #f3f3f3);
+      }
+      /* The gallery's own default width (300px) is wider than the left panel's content area. */
+      #basemap-host arcgis-basemap-gallery {
+        width: 100%;
+      }
+      .plan-note {
+        margin-top: var(--calcite-spacing-sm, 8px);
+        font-family: var(--calcite-font-family, sans-serif);
+        font-size: 12px;
+        color: var(--calcite-color-text-3, #6a6a6a);
+      }
+      /* The workspace panel: a heading row, the steps, one step's controls, and Back / Next at the bottom. */
+      .workspace-panel {
+        padding: var(--calcite-spacing-md, 12px) var(--calcite-spacing-lg, 16px) var(--calcite-spacing-xl, 20px);
+        font-family: var(--calcite-font-family, sans-serif);
+        font-size: 14px;
+      }
+      .ws-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: var(--calcite-spacing-sm, 8px);
+        margin-bottom: var(--calcite-spacing-sm, 8px);
+      }
+      .ws-title {
+        margin: 0;
+        font-size: 16px;
+        font-weight: 600;
+      }
+      .ws-step-title {
+        margin: var(--calcite-spacing-md, 12px) 0 var(--calcite-spacing-xs, 6px);
+        font-size: 14px;
+        font-weight: 600;
+      }
+      .ws-confirm {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: var(--calcite-spacing-sm, 8px);
+        margin-bottom: var(--calcite-spacing-sm, 8px);
+        padding: var(--calcite-spacing-sm, 8px) var(--calcite-spacing-md, 12px);
+        border: 1px solid var(--calcite-color-border-2, #ccc);
+        border-radius: 4px;
+        font-size: 13px;
+      }
+      .ws-nav {
+        display: flex;
+        justify-content: space-between;
+        gap: var(--calcite-spacing-sm, 8px);
+        margin-top: var(--calcite-spacing-lg, 16px);
+        padding-top: var(--calcite-spacing-md, 12px);
+        border-top: 1px solid var(--calcite-color-border-3, #ddd);
+      }
+      .ws-grid2 {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: var(--calcite-spacing-sm, 8px);
+      }
+      .ws-row {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: var(--calcite-spacing-sm, 8px);
+        margin: var(--calcite-spacing-sm, 8px) 0;
+      }
+      .ws-field {
+        margin: var(--calcite-spacing-md, 12px) 0;
+      }
+      .ws-field > .ws-label {
+        display: block;
+        margin-bottom: var(--calcite-spacing-xxs, 4px);
+        font-size: 13px;
+        font-weight: 500;
+      }
+      .ws-kv {
+        display: grid;
+        grid-template-columns: auto 1fr;
+        gap: 2px var(--calcite-spacing-md, 12px);
+        margin: var(--calcite-spacing-sm, 8px) 0;
+        font-size: 13px;
+      }
+      .ws-kv dt {
+        color: var(--calcite-color-text-3, #6a6a6a);
+      }
+      .ws-kv dd {
+        margin: 0;
+        overflow-wrap: anywhere;
+      }
+      .ws-note-warn {
+        color: var(--calcite-color-status-warning, #bd6f00);
+      }
+      .ws-note-bad {
+        color: var(--calcite-color-status-danger, #d83020);
+      }
+      .ws-note-good {
+        color: var(--calcite-color-status-success, #35ac46);
+      }
+      .ws-verdict {
+        font-size: 14px;
+        font-weight: 600;
+      }
+      .ws-busy {
+        display: flex;
+        align-items: center;
+        gap: var(--calcite-spacing-sm, 8px);
+        font-size: 13px;
+        color: var(--calcite-color-text-3, #6a6a6a);
+      }
+      .ws-points {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 12px;
+        font-variant-numeric: tabular-nums;
+      }
+      .ws-points th,
+      .ws-points td {
+        padding: 3px 4px;
+        border-bottom: 1px solid var(--calcite-color-border-3, #ddd);
+        text-align: right;
+        white-space: nowrap;
+      }
+      .ws-points th:first-child,
+      .ws-points td:first-child {
+        text-align: left;
+      }
+      .ws-points tr.sel td {
+        background: var(--calcite-color-foreground-2, #f3f3f3);
+      }
+      .ws-points tr.off td {
+        color: var(--calcite-color-text-3, #6a6a6a);
+      }
+      .ws-points tbody tr {
+        cursor: pointer;
+      }
+      .plans-group-title {
+        margin-top: var(--calcite-spacing-md, 12px);
+        font-size: 13px;
+        font-weight: 600;
+      }
+      .plans-group-title.quiet,
+      .plan-row.quiet {
+        opacity: 0.85;
+      }
+      .plans-group-title.quiet {
+        font-weight: 500;
+        color: var(--calcite-color-text-3, #6a6a6a);
+      }
+      .plan-row {
+        padding: var(--calcite-spacing-sm, 8px) 0;
+        border-bottom: 1px solid var(--calcite-color-border-3, #ddd);
+      }
+      .plan-row-name {
+        font-size: 14px;
+        overflow-wrap: anywhere;
+      }
+      .plan-row-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0 var(--calcite-spacing-xs, 4px);
+        margin-left: calc(-1 * var(--calcite-spacing-sm, 8px));
+      }
+      .ws-preview {
+        display: block;
+        width: 100%;
+        border: 1px solid var(--calcite-color-border-3, #ddd);
+        border-radius: 2px;
+        background: var(--calcite-color-foreground-1, #fff);
+      }
+      .ws-pre {
+        max-height: 14rem;
+        overflow: auto;
+        margin: var(--calcite-spacing-sm, 8px) 0;
+        padding: var(--calcite-spacing-sm, 8px);
+        background: var(--calcite-color-foreground-2, #f3f3f3);
+        border-radius: 4px;
+        font-family: ui-monospace, Consolas, monospace;
+        font-size: 11px;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
+      /* The image lightbox (lightbox.js): a transient full-window modal, so unlike every other overlay in this app it
+         is allowed to cover the whole window including the side panels. z-index above everything else on the page. */
+      .lightbox-overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 1000;
+      }
+      .lightbox-overlay[hidden] {
+        display: none;
+      }
+      .lightbox-scrim {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: color-mix(in srgb, black 80%, transparent);
+      }
+      .lightbox-dialog {
+        position: relative;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        outline: none;
+      }
+      .lightbox-img {
+        touch-action: none;
+        transform-origin: center center;
+        user-select: none;
+      }
+      .lightbox-fallback {
+        color: var(--calcite-color-text-inverse, #fff);
+        font-family: var(--calcite-font-family, sans-serif);
+      }
+      .lightbox-close {
+        position: absolute;
+        top: max(12px, env(safe-area-inset-top));
+        right: max(12px, env(safe-area-inset-right));
+        z-index: 2;
+        width: 48px;
+        height: 48px;
+        padding: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border: 2px solid rgba(0, 0, 0, 0.6);
+        border-radius: 50%;
+        background: #fff;
+        color: #111;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
+        cursor: pointer;
+        touch-action: manipulation;
+      }
+      .lightbox-close:hover {
+        background: #ffd9d9;
+        color: #b00020;
+        transform: scale(1.08);
+      }
+      .lightbox-close:focus-visible {
+        outline: 3px solid #1a73e8;
+        outline-offset: 3px;
+      }
+      .lightbox-toolbar {
+        z-index: 2;
+        position: absolute;
+        bottom: 16px;
+        left: 50%;
+        transform: translateX(-50%);
+        display: flex;
+        gap: 4px;
+        background: var(--calcite-color-foreground-1, #fff);
+        border-radius: 6px;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+      }
+      .lightbox-sr-only {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+      }
+    </style>
+  </head>
+
+  <body>
+    <calcite-shell>
+      <div slot="header" class="header">
+        <h1>Parcel Viewer</h1>
+        <span id="user"></span>
+      </div>
+
+      <calcite-shell-panel slot="panel-start" width="m">
+        <calcite-panel>
+          <!-- Only opened for warnings and errors -->
+          <calcite-notice id="status" kind="warning" scale="s" width="auto" closable>
+            <div slot="title"></div>
+            <div slot="message"></div>
+          </calcite-notice>
+
+          <!-- Shown once the gallery is built -->
+          <calcite-block id="basemap-block" heading="Basemap" collapsible hidden>
+            <div id="basemap-host"></div>
+          </calcite-block>
+
+          <!-- Shown once the layer list is built -->
+          <calcite-block id="layers-block" heading="Layers" collapsible hidden>
+            <div id="layer-list-host"></div>
+          </calcite-block>
+
+          <calcite-block id="symbology-block" heading="Symbology" collapsible expanded>
+            <calcite-label>
+              Color parcels by
+              <calcite-segmented-control id="style-picker" layout="vertical" width="full"></calcite-segmented-control>
+            </calcite-label>
+          </calcite-block>
+
+          <!-- Shown once the labels are set up -->
+          <calcite-block id="labels-block" heading="Labels" collapsible hidden>
+            <div id="labels-body"></div>
+          </calcite-block>
+
+          <!-- Shown once the filter is set up -->
+          <calcite-block id="filter-block" heading="Filter" collapsible hidden>
+            <div id="filter-body"></div>
+            <div id="filter-count" class="filter-count" aria-live="polite"></div>
+          </calcite-block>
+
+          <!-- Shown once the measurement tools are built -->
+          <calcite-block id="measure-block" heading="Measure" collapsible hidden>
+            <calcite-segmented-control id="measure-tool" width="full" scale="s">
+              <calcite-segmented-control-item value="length" checked>Length</calcite-segmented-control-item>
+              <calcite-segmented-control-item value="area">Area</calcite-segmented-control-item>
+            </calcite-segmented-control>
+            <div id="measure-host"></div>
+            <calcite-button id="measure-clear" appearance="outline" scale="s">Clear</calcite-button>
+            <div class="plan-note">Clicks on the map measure instead of selecting parcels while a measurement is in progress.</div>
+          </calcite-block>
+
+          <calcite-block id="print-block" heading="Print map" collapsible hidden>
+            <div id="print-body"></div>
+          </calcite-block>
+
+          <!-- Shown once the block is set up (whatsHere.js) -->
+          <calcite-block id="here-block" heading="What's in this parcel" collapsible hidden>
+            <div id="here-body"></div>
+          </calcite-block>
+          <calcite-tooltip id="here-tooltip" placement="right">Select a parcel first</calcite-tooltip>
+
+          <!-- The Plans for the selected parcel and the Georeference plan PDF button (plansBlock.js) -->
+          <calcite-block id="plans-block" heading="Plans" collapsible hidden>
+            <div id="plans-body"></div>
+          </calcite-block>
+          <calcite-tooltip id="plans-tooltip" placement="right">Select a parcel first</calcite-tooltip>
+
+          <!-- Troubleshooting only: shown with ?debug=1 -->
+          <calcite-block id="debug-block" heading="Debug: layers and tables" collapsible hidden>
+            <calcite-list id="inventory" label="Layers and tables in the web map"></calcite-list>
+          </calcite-block>
+
+          <!-- The georeferencing workspace's steps and controls; shown instead of the blocks while it is open (workspace.js) -->
+          <div id="workspace-panel" class="workspace-panel" hidden></div>
+        </calcite-panel>
+      </calcite-shell-panel>
+
+      <calcite-shell-panel slot="panel-end" id="parcel-shell-panel" width="m" resizable>
+        <calcite-panel id="parcel-card" heading="Selected parcel" closable>
+          <calcite-action id="parcel-copy-link" slot="header-actions-end" icon="link" text="Copy link" scale="s" hidden></calcite-action>
+          <!-- The row of buttons (What's in this parcel, Plans): parcelActions.js. Only while a parcel is selected;
+               content-top doesn't scroll, so the buttons stay reachable when the parcel content is long. -->
+          <div id="parcel-actions" slot="content-top" class="parcel-actions" hidden></div>
+          <div id="parcel-empty" class="parcel-state">
+            <calcite-icon icon="cursor-click" scale="l"></calcite-icon>
+            <p>Click a feature on the map to see its details.</p>
+          </div>
+          <div id="parcel-loading" class="parcel-state" hidden>
+            <calcite-loader label="Loading feature details" text="Loading feature details…"></calcite-loader>
+          </div>
+          <calcite-notice id="parcel-error" kind="danger" scale="s" width="auto" open hidden>
+            <div slot="title">Couldn't load this feature's details</div>
+            <div slot="message">Click the feature again to retry.</div>
+          </calcite-notice>
+          <div id="parcel-body" hidden>
+            <arcgis-feature id="parcel-feature"></arcgis-feature>
+          </div>
+        </calcite-panel>
+      </calcite-shell-panel>
+
+      <!-- The map area. The georeferencing workspace docks a sheet pane beside the map (workspace.js); everything that
+           floats over the map (search box, filter editor, legend) stays inside #map-host, so none of it covers the sheet. -->
+      <div id="content-row">
+        <div id="sheet-pane" hidden>
+          <div id="sheet-host">
+            <canvas id="sheet-canvas"></canvas>
+            <div id="sheet-empty" class="sheet-empty">Open a plan PDF to begin.</div>
+            <div class="sheet-tools">
+              <calcite-action id="sheet-zoom-in" icon="plus" text="Zoom in" scale="s"></calcite-action>
+              <calcite-action id="sheet-zoom-out" icon="minus" text="Zoom out" scale="s"></calcite-action>
+              <calcite-action id="sheet-fit" icon="extent" text="Fit sheet" scale="s"></calcite-action>
+            </div>
+          </div>
+          <div id="sheet-readout" class="sheet-readout"></div>
+        </div>
+        <div id="sheet-splitter" role="separator" aria-orientation="vertical" aria-label="Resize the sheet pane" tabindex="0" hidden></div>
+      <div id="map-host">
+        <!-- Expanded filter editor. It lives inside the map area (not the viewport), so the shell layout
+             keeps it clear of the parcel panel; filter.js sizes it and slides it. -->
+        <calcite-panel id="filter-dialog" class="filter-editor" closable closed>
+          <div slot="heading" class="filter-dialog-heading">
+            <span>Filter parcels</span>
+            <span id="filter-dialog-count" class="filter-dialog-count" aria-live="polite"></span>
+          </div>
+          <div id="filter-dialog-body"></div>
+          <calcite-button id="filter-dialog-zoom" slot="footer-start" appearance="outline" icon-start="zoom-to-object">Zoom to results</calcite-button>
+          <calcite-button id="filter-dialog-apply" slot="footer-end">Apply</calcite-button>
+          <calcite-button id="filter-dialog-clear" slot="footer-end" appearance="outline">Clear</calcite-button>
+          <calcite-button id="filter-dialog-close" slot="footer-end" appearance="outline-fill">Close</calcite-button>
+        </calcite-panel>
+      </div>
+      </div>
+    </calcite-shell>
+
+  </body>
+</html>
