@@ -243,7 +243,8 @@ export async function setupSearch(mapEl, parcel, panel) {
     } catch (err) {
       if (err?.name === "AbortError") return;
       console.warn(`Couldn't show the ${MODES[mode].LABEL.toLowerCase()} result:`, err);
-      setStatus("warning", `Couldn't show that ${MODES[mode].LABEL.toLowerCase()}`, err?.message ?? String(err));
+      // a URL in the SDK's message keeps only its address: its query can hold the sign-in token
+      setStatus("warning", `Couldn't show that ${MODES[mode].LABEL.toLowerCase()}`, String(err?.message ?? err).replace(/(https?:\/\/[^\s?#]+)[?#]\S*/gi, "$1")); 
     }
   }
   const clearMarks = () => modes.forEach((m) => m.clear());
