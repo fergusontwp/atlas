@@ -143,6 +143,9 @@ export const SEARCH = {
     // The ranking point (the parcel layer's extent centre) is sent in WGS84 lon/lat, rounded to this many decimals; one
     // outside STATE_EXTENT, or not a lon/lat at all, is dropped (no ranking point) with one console warning.
     BIAS_DECIMALS: 6,
+    // The geocoder is asked for results in this wkid only (outSR {"wkid":3857}); never the view's spatial reference, whose
+    // storage parameters from the web map (falseX, xyUnits, tolerances) made findAddressCandidates answer 502.
+    OUT_WKID: 3857,
     TEXT: { NO_MATCH: "No place found in Pennsylvania.", FAILED: "Location search unavailable", OUTSIDE: "Outside Pennsylvania" },
   },
   // The road outline and the location marker (list-hidden graphics layers; the marker is point info's when it exists).

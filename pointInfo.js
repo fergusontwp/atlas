@@ -1,4 +1,5 @@
 import { GEOREF, POINT_INFO, SEARCH } from "./config.js";
+import { reverseParams } from "./geocodeParams.js";
 import { cacheFind, cacheKey, createCache, distanceText, geocodeFailure, geocodeLabel, googleMapsUrl, isRightClick, latLonText, parcelSection, placeCard } from "./pointInfoLogic.js";
 import { h } from "./dom.js";
 import { setStatus } from "./ui.js";
@@ -200,7 +201,8 @@ export async function setupPointInfo({ mapEl, parcel, panel, filter }) {
         const timer = setTimeout(() => { timedOut = true; own.abort(); }, GC.TIMEOUT_MS);
         requests++;
         try {
-          const candidate = await geocoder.locator.locationToAddress(GC.URL, { location: point }, { signal: own.signal, authMode: "no-prompt" });
+          // the point with only its wkid (geocodeParams.js): the view's spatial reference carries the web map's storage parameters
+          const candidate = await geocoder.locator.locationToAddress(GC.URL, reverseParams(point), { signal: own.signal, authMode: "no-prompt" });
           const label = geocodeLabel(candidate);
           answer = label ? { status: "ok", address: label, at: geocoder.toFeet(candidate.location) } : { status: "none" };
         } catch (err) {

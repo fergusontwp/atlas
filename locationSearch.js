@@ -1,6 +1,7 @@
 import { HIGHLIGHT, POINT_INFO, SEARCH } from "./config.js";
 import { geocodeFailure } from "./pointInfoLogic.js";
 import { biasPoint, candidateInState, retryWithoutBias, suggestionInState } from "./locationFilter.js";
+import { findParams, suggestParams } from "./geocodeParams.js";
 import { outlineSymbols } from "./selectionMode.js";
 import { keepNearTop } from "./roadSearch.js";
 
@@ -13,6 +14,9 @@ import { keepNearTop } from "./roadSearch.js";
 // the centre of the parcel layer's full extent as `location`, projected once here to WGS84 lon/lat (the layer's own
 // coordinates, UTM metres, made the find fail with a 502) and checked by locationFilter.biasPoint; nothing else is
 // limited to it, so any place in the state can be found. If a find with it fails without an answer or with a 5xx, it is
+// Spatial references sent are only ever { wkid } (geocodeParams.js): results come back in SEARCH.LOCATION.OUT_WKID
+// (3857) and are projected to the view here if it isn't Web Mercator; the view's own spatial reference, with the web
+// map's storage parameters (falseX, xyUnits, ...), is never sent (it made findAddressCandidates answer 502). A result zooms to its extent, or to its point at LOCATION.SCALE, and is
 // asked once more without `location` (the same pick: one result shown, nothing stored). A result zooms to its extent, or to its point at LOCATION.SCALE, and is
 // marked: point info opens there (its marker) when it exists, else a ring in location-search-marker.
 // Pennsylvania only (SEARCH.LOCATION): both requests carry the state's box as searchExtent and the country code; a
@@ -22,11 +26,9 @@ import { keepNearTop } from "./roadSearch.js";
 // opts: { mapEl, search, parcel, pointInfo }.
 export async function setupLocationSearch({ mapEl, search, parcel, pointInfo = null }) {
   const L = SEARCH.LOCATION, URL = POINT_INFO.GEOCODE.URL;
-  const [locator, GraphicsLayer, Graphic, Extent, Point, SpatialReference, projectOperator] = await $arcgis.import(["@arcgis/core/rest/locator.js",
-    "@arcgis/core/layers/GraphicsLayer.js", "@arcgis/core/Graphic.js", "@arcgis/core/geometry/Extent.js", "@arcgis/core/geometry/Point.js",
+  const [locator, GraphicsLayer, Graphic, Point, SpatialReference, projectOperator] = await $arcgis.import(["@arcgis/core/rest/locator.js",
+    "@arcgis/core/layers/GraphicsLayer.js", "@arcgis/core/Graphic.js", "@arcgis/core/geometry/Point.js",
     "@arcgis/core/geometry/SpatialReference.js", "@arcgis/core/geometry/operators/projectOperator.js"]);
-  const stateBox = new Extent({ ...L.STATE_EXTENT, spatialReference: { wkid: 4326 } });
-  const limits = { searchExtent: stateBox, countryCode: L.COUNTRY_CODE };
   // the ranking point: the extent centre in WGS84, once
   let near = null;
   const centre = parcel?.fullExtent?.center ?? null;
@@ -56,7 +58,7 @@ export async function setupLocationSearch({ mapEl, search, parcel, pointInfo = n
     let suggestions;
     try {
       state.requests.suggest++;
-      suggestions = await locator.suggestLocations(URL, { text, ...(near ? { location: near } : {}), maxSuggestions: L.MAX_SUGGESTIONS, ...limits }, options(signal));
+      suggestions = await locator.suggestLocations(URL, suggestParams({ text, location: near }, L), options(signal));
     } catch (err) {
       if (err?.name === "AbortError" || signal.aborted) throw err;
       console.warn("Location search: suggestions failed:", err);
@@ -67,12 +69,17 @@ export async function setupLocationSearch({ mapEl, search, parcel, pointInfo = n
   }
 
   let infoAt = null; // the point info card this mode opened (its coordinates), closed with the marker
+    // a result (in OUT_WKID) in the view's spatial reference: as it is when both are Web Mercator, else projected
+  async function toView(geometry) {
+    const viewSr = mapEl.view.spatialReference, sr = geometry?.spatialReference;
+    if (!geometry || !sr || sr.equals(viewSr) || (sr.isWebMercator && viewSr.isWebMercator)) return geometry;
+    if (!projectOperator.isLoaded()) await projectOperator.load();
+    return projectOperator.execute(geometry, viewSr) ?? geometry;
+  }
   async function choose(row) {
     state.requests.find++; // one pick, even if it is asked twice
-    const find = (location) => locator.addressToLocations(URL, {
-      address: { SingleLine: row.main }, magicKey: row.magicKey, ...(location ? { location } : {}), maxLocations: 1, ...limits,
-      outFields: L.OUT_FIELDS, outSpatialReference: mapEl.view.spatialReference,
-    }, options());
+    // the retry is a different request (no location; outSR is clean in both), never the same one again
+    const find = (location) => locator.addressToLocations(URL, findParams({ text: row.main, magicKey: row.magicKey, location }, L), options());
         let found;
     try {
       found = await find(near);
@@ -87,8 +94,8 @@ export async function setupLocationSearch({ mapEl, search, parcel, pointInfo = n
     if (!candidate?.location) throw new Error(L.TEXT.NO_MATCH);
     if (!candidateInState(candidate, L.STATE_ABBR)) return { note: L.TEXT.OUTSIDE }; // shown in the list; no zoom, no marker
     state.chosen = candidate.address ?? row.main;
-    const point = candidate.location;
-    if (candidate.extent) await mapEl.view.goTo(candidate.extent);
+    const point = await toView(candidate.location), extent = candidate.extent ? await toView(candidate.extent) : null;
+    if (extent) await mapEl.view.goTo(extent);
     else await mapEl.view.goTo({ target: point, scale: L.SCALE });
     if (pointInfo) {
       pointInfo.open(point);
