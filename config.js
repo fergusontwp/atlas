@@ -140,6 +140,9 @@ export const SEARCH = {
     COUNTRY_CODE: "USA",
     STATE_ABBR: "PA",
     OUT_FIELDS: ["RegionAbbr", "Region"],
+    // The ranking point (the parcel layer's extent centre) is sent in WGS84 lon/lat, rounded to this many decimals; one
+    // outside STATE_EXTENT, or not a lon/lat at all, is dropped (no ranking point) with one console warning.
+    BIAS_DECIMALS: 6,
     TEXT: { NO_MATCH: "No place found in Pennsylvania.", FAILED: "Location search unavailable", OUTSIDE: "Outside Pennsylvania" },
   },
   // The road outline and the location marker (list-hidden graphics layers; the marker is point info's when it exists).
