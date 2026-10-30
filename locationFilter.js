@@ -36,3 +36,23 @@ export function candidateInState(candidate, abbr) {
   const s = stateOf(candidate?.address);
   return s === null || s === abbr;
 }
+
+// The ranking point for the geocoder: the parcel layer's extent centre, already projected to WGS84 ({ x: lon, y: lat }),
+// rounded to cfg.BIAS_DECIMALS, or null when it isn't a real lon/lat inside cfg.STATE_EXTENT (a centre left in its
+// layer's own coordinates, UTM metres say, would be sent as a nonsense location). cfg: SEARCH.LOCATION.
+export function biasPoint(lonLat, cfg) {
+  const x = Number(lonLat?.x), y = Number(lonLat?.y), box = cfg.STATE_EXTENT;
+  if (!Number.isFinite(x) || !Number.isFinite(y) || x < -180 || x > 180 || y < -90 || y > 90) return null;
+  if (x < box.xmin || x > box.xmax || y < box.ymin || y > box.ymax) return null;
+  const f = 10 ** cfg.BIAS_DECIMALS, round = (v) => Math.round(v * f) / f;
+  return { x: round(x), y: round(y) };
+}
+
+// Whether a failed find is worth one retry without the ranking point: no answer at all (the browser's "Failed to
+// fetch", which a gateway error without CORS headers also gives) or a 5xx. Not a cancel, a sign-in or another 4xx.
+export function retryWithoutBias(err) {
+  if (!err || err.name === "AbortError") return false;
+  const status = Number(err.details?.httpStatus ?? err.details?.raw?.error?.code ?? err.httpStatus ?? NaN);
+  if (Number.isFinite(status) && status > 0) return status >= 500;
+  return /failed to fetch|networkerror|network error|load failed|unable to load|timeout|timed out/i.test(String(err.message ?? err));
+}
