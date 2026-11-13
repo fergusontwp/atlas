@@ -1,0 +1,10 @@
+import title from "./title.js";
+import scaleBar from "./scaleBar.js";
+import northArrow from "./northArrow.js";
+import date from "./date.js";
+import notes from "./notes.js";
+import attribution from "./attribution.js";
+import legend from "./legend.js";
+import sketch from "./sketch.js";
+import callouts from "./callouts.js";
+export const printElements = [title, scaleBar, northArrow, legend, date, notes, attribution, sketch, callouts];
